@@ -1,47 +1,64 @@
-import { WebSocket } from 'ws';
+import WebSocket from 'ws';
 
-const ws: WebSocket = new WebSocket('ws://your-server-url');
+interface AIMessage {
+  type: 'token' | 'tool' | 'done' | 'error' | 'connected';
+  content: string;
+  role?: string;
+  threadId?: string;
+}
 
-ws.onopen = (): void => {
-  console.log('Connected to WebSocket');
+interface GeminiRequest {
+  type: 'gemini';
+  content: string;
+  threadId?: string;
+}
 
-  // Send a query
-  ws.send(
-    JSON.stringify({
-      type: 'query',
-      message: 'Hello, how are you?',
-      threadId: 'some-thread-id',
-    }),
-  );
+const ws = new WebSocket('ws://localhost:3000/ai');
+
+const sendGeminiMessage = (content: string, threadId?: string): void => {
+  const message: GeminiRequest = {
+    type: 'gemini',
+    content,
+    threadId,
+  };
+  ws.send(JSON.stringify(message));
 };
 
-ws.onmessage = (event: MessageEvent): void => {
-  const data = JSON.parse(event.data);
+ws.onopen = (): void => {
+  console.log('Connected to AI service');
+  sendGeminiMessage('What is the latest news about AI technology?', 'session_123');
+};
 
-  switch (data.type) {
+ws.onmessage = (event: WebSocket.MessageEvent): void => {
+  const message: AIMessage = JSON.parse(event.data.toString());
+
+  switch (message.type) {
     case 'token':
-      // Handle streaming token
-      console.log('Received token:', data.content);
+      // Handle streaming tokens
+      process.stdout.write(message.content);
       break;
+
     case 'tool':
-      // Handle tool output
-      console.log('Tool output:', data.content);
+      // Handle search notifications
+      console.log('\nSearch Info:', message.content);
       break;
+
     case 'done':
-      // Handle completion
-      console.log('Final response:', data.content);
+      console.log('\nFinal Response:', message.content);
+      // Ask follow-up question
+      sendGeminiMessage('Can you explain more about that?', 'session_123');
       break;
+
     case 'error':
-      // Handle error
-      console.error('Error:', data.content);
+      console.error('Error:', message.content);
       break;
   }
 };
 
-ws.onerror = (error: Event): void => {
+ws.onerror = (error: WebSocket.ErrorEvent): void => {
   console.error('WebSocket error:', error);
 };
 
 ws.onclose = (): void => {
-  console.log('Disconnected from WebSocket');
+  console.log('Disconnected from AI service');
 };

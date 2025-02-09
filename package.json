@@ -17,6 +17,7 @@
     "deploy:dev": "pm2 start ecosystem.config.js --only dev"
   },
   "dependencies": {
+    "@google/generative-ai": "^0.21.0",
     "@langchain/community": "^0.3.29",
     "@langchain/core": "^0.3.39",
     "@langchain/langgraph": "^0.2.45",
