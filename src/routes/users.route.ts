@@ -6,10 +6,11 @@ import { ValidationMiddleware } from '@middlewares/validation.middleware';
 
 export class UserRoute implements Routes {
   public path = '/users';
-  public router = Router();
+  public router: Router;
   public user = new UserController();
 
   constructor() {
+    this.router = Router();
     this.initializeRoutes();
   }
 
