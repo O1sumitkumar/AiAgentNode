@@ -1,24 +1,21 @@
-import express from 'express';
-import { createServer } from 'http';
-import { WebSocketServer } from 'ws';
 import { App } from '@/app';
+import { AgentRoute } from '@routes/agent.route';
 import { AuthRoute } from '@routes/auth.route';
 import { UserRoute } from '@routes/users.route';
-import { AgentRoute } from '@routes/agent.route';
 import { ValidateEnv } from '@utils/validateEnv';
+import { createServer } from 'http';
+import { WebSocketServer } from 'ws';
 import { setupAgentWebSocket } from './websocket/agent.websocket';
 
 ValidateEnv();
 
-const app = express();
-const server = createServer(app);
+const appInstance = new App([new UserRoute(), new AuthRoute(), new AgentRoute()]);
+const server = createServer(appInstance.app);
 const wss = new WebSocketServer({ server, path: '/ai' });
 
-wss.on('connection', ws => {
+wss.on('connection', (ws: any) => {
   setupAgentWebSocket(ws);
 });
-
-const appInstance = new App([new UserRoute(), new AuthRoute(), new AgentRoute()]);
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
