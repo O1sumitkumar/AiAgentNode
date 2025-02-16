@@ -16,5 +16,12 @@ export const dbConnection = async () => {
   }
   console.log(dbConfig.url);
 
-  await connect(dbConfig.url, dbConfig.options);
+  try {
+    await connect(dbConfig.url, dbConfig.options);
+    console.log('Database connected successfully!');
+  } catch (error) {
+    console.error('Error connecting to the database:', error);
+    // Optionally, exit the process if the connection fails
+    process.exit(1);
+  }
 };

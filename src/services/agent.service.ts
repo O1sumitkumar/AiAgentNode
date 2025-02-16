@@ -1,24 +1,34 @@
-import { Service } from 'typedi';
+import { ChatHistory, ConversationSession } from '@/interfaces/agent.interface';
+import {
+  ChatSession as GeminiChatSession,
+  GenerationConfig,
+  GenerativeModel,
+  GoogleGenerativeAI,
+  HarmBlockThreshold,
+  HarmCategory,
+  SafetySetting,
+} from '@google/generative-ai';
 import { TavilySearchResults } from '@langchain/community/tools/tavily_search';
-import OpenAI from 'openai';
 import { MemorySaver } from '@langchain/langgraph';
 import { createReactAgent } from '@langchain/langgraph/prebuilt';
 import { ChatOpenAI } from '@langchain/openai';
+import OpenAI from 'openai';
+import { RateLimiterMemory } from 'rate-limiter-flexible';
+import { Service } from 'typedi';
 import { WebSocket } from 'ws';
-import {
-  GoogleGenerativeAI,
-  GenerativeModel,
-  ChatSession as GeminiChatSession,
-  HarmCategory,
-  HarmBlockThreshold,
-  SafetySetting,
-  GenerationConfig,
-} from '@google/generative-ai';
 
 // Enhanced system prompt
 const SYSTEM_PROMPT =
-  'You are Lana, an intelligent and friendly AI assistant developed by Atlantis Software Inc. for the Atlantis AI product. Your goal is to provide clear, concise, and accurate responses in a user-friendly format. When responding, always give a brief summary that covers only the essential details—even if the query is detailed. If needed, ask if the user would like more information. Respond naturally and clearly, without unnecessary elaboration.\n\n**Response Formatting Guidelines:**\n- **Keep it concise:** Provide only the key details in a brief summary.\n- **Bold Key Information:** Wrap important details in double asterisks (e.g., **Temperature: 26.8°C**).\n- **Code:** Use triple backticks (```) with a preceding key (e.g., `code:`) for code snippets.\n- **Links:** Precede links with a key label (e.g., `link:`) to help differentiate them in the UI.\n\nAlways maintain a warm, professional tone and be proactive in clarifying ambiguities.';
+  'You are Lana, an intelligent and friendly AI assistant developed by Atlantis Software Inc. for the Atlantis AI product owned by Sumeet kumar jha.  Your goal is to provide clear, concise, and accurate responses in a user-friendly format. When responding, always give a brief summary that covers only the essential details—even if the query is detailed. If needed, ask if the user would like more information. Respond naturally and clearly, without unnecessary elaboration.\n\n**Response Formatting Guidelines:**\n- **Keep it concise:** Provide only the key details in a brief summary.\n- **Bold Key Information:** Wrap important details in double asterisks (e.g., **Temperature: 26.8°C**).\n- **Code:** Use triple backticks (```) with a preceding key (e.g., `code:`) for code snippets.\n- **Links:** Precede links with a key label (e.g., `link:`) to help differentiate them in the UI.\n\nAlways maintain a warm, professional tone and be proactive in clarifying ambiguities.';
 
+const freeModals = [
+  'deepseek/deepseek-r1-distill-llama-70b:free',
+  'deepseek/deepseek-r1:free',
+  'deepseek/deepseek-chat:free',
+  'meta-llama/llama-3.2-11b-vision-instruct:free',
+  'nvidia/llama-3.1-nemotron-70b-instruct:free',
+  'undi95/toppy-m-7b:free',
+];
 // Gemini generation configuration
 const GEMINI_CONFIG: GenerationConfig = {
   temperature: 0.9,
@@ -48,34 +58,6 @@ const SAFETY_SETTINGS: SafetySetting[] = [
   },
 ];
 
-interface ChatHistory {
-  role: 'user' | 'model';
-  parts: Array<{ text: string }>;
-}
-
-interface ChatSession {
-  chat: GeminiChatSession;
-  history: ChatHistory[];
-}
-
-interface ConversationSession extends ChatSession {
-  sessionId: string;
-  userId?: string;
-  createdAt: Date;
-  lastUpdated: Date;
-  context: {
-    topic?: string;
-    searchHistory: Array<{
-      query: string;
-      results: any[];
-      timestamp: Date;
-    }>;
-    messageCount: number;
-    lastInteraction: Date;
-    summary?: string;
-  };
-}
-
 @Service()
 export class AgentService {
   private readonly agent;
@@ -87,6 +69,10 @@ export class AgentService {
   private readonly geminiChats: Map<string, ConversationSession>;
   private readonly searchCache: Map<string, { results: any[]; timestamp: number }> = new Map();
   private readonly SESSION_EXPIRY = 1000 * 60 * 60; // 1 hour
+  readonly limiter = new RateLimiterMemory({
+    points: 100, // 100 requests
+    duration: 60, // per minute
+  });
 
   constructor() {
     this.getWebSearchResults = new TavilySearchResults({
@@ -153,6 +139,9 @@ export class AgentService {
 
   /** Query using the react agent (non-streaming) */
   public async query(message: string, threadId: string) {
+    await this.limiter.consume(threadId);
+    const validation = this.validateMessage(message);
+    if (!validation.valid) throw new Error(validation.reason);
     try {
       const response = await this.agent.invoke(
         {
@@ -191,7 +180,7 @@ export class AgentService {
             {
               handleLLMNewToken: (token: string) => {
                 if (token) {
-                streamedContent += token;
+                  streamedContent += token;
                   ws.send(JSON.stringify({ role: 'assistant', type: 'token', content: token, threadId }));
                 }
               },
@@ -219,7 +208,7 @@ export class AgentService {
     let streamedContent = '';
     try {
       const stream = await this.openai.chat.completions.create({
-        model: 'deepseek/deepseek-r1-distill-llama-70b:free',
+        model: freeModals[freeModals.length - 1],
         messages: [
           { role: 'system', content: this.systemPrompt },
           { role: 'user', content: message.trim() },
@@ -227,6 +216,7 @@ export class AgentService {
         stream: true,
       });
       for await (const chunk of stream) {
+        console.log(chunk);
         const content = chunk.choices[0]?.delta?.content || '';
         if (content) {
           streamedContent += content;
@@ -266,7 +256,7 @@ DECISION: [SEARCH or DIRECT]
 REASON: [One brief sentence explaining why]`;
 
       const analysisResult = await session.chat.sendMessage(analysisPrompt);
-      const analysisResponse = await analysisResult.response.text();
+      const analysisResponse = analysisResult.response.text();
       const needsSearch = analysisResponse.includes('DECISION: SEARCH');
       const reason = analysisResponse.match(/REASON: (.*)/)?.[1] || '';
 
@@ -307,7 +297,7 @@ REASON: [One brief sentence explaining why]`;
     const sessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     try {
       const initResult = await chat.sendMessage(SYSTEM_PROMPT);
-      const initResponse = await initResult.response.text();
+      const initResponse = initResult.response.text();
       return {
         sessionId,
         userId,
@@ -369,7 +359,7 @@ Task: Provide a **brief and natural response** that summarizes the key informati
 
     if (!session.context.topic) {
       const topicAnalysis = await chat.sendMessage("Based on our conversation so far, what's the main topic? Respond with just 2-3 words.");
-      session.context.topic = await topicAnalysis.response.text();
+      session.context.topic = topicAnalysis.response.text();
     }
   }
 
@@ -397,7 +387,7 @@ Task: Provide a **clear and natural response** with only the essential details, 
     const session = this.geminiChats.get(threadId)!;
     if (!session.context.topic) {
       const topicAnalysis = await chat.sendMessage("Based on our conversation so far, what's the main topic? Respond with just 2-3 words.");
-      session.context.topic = await topicAnalysis.response.text();
+      session.context.topic = topicAnalysis.response.text();
     }
   }
 
@@ -468,5 +458,44 @@ Task: Provide a **clear and natural response** with only the essential details, 
   /** Clear a session */
   public async clearSession(threadId: string): Promise<void> {
     this.geminiChats.delete(threadId);
+  }
+
+  // Consider adding model quality gates
+  private shouldUseExpensiveModel(message: string): boolean {
+    return message.split(/\s+/).length > 50; // Use cheaper models for short queries
+  }
+
+  // Add fallback mechanism
+  private async withFallback(fn: () => Promise<any>, fallbackFn: () => Promise<any>) {
+    try {
+      return await fn();
+    } catch (error) {
+      if (error.statusCode === 429 || error.code === 'rate_limited') {
+        return await fallbackFn();
+      }
+      throw error;
+    }
+  }
+
+  // Add validation layer
+  private validateMessage(message: string): { valid: boolean; reason?: string } {
+    const MAX_LENGTH = 1000;
+    const BLACKLIST = ['credit card', 'password' /* sensitive terms */];
+
+    if (message.length > MAX_LENGTH) return { valid: false, reason: 'Message too long' };
+    if (BLACKLIST.some(term => message.includes(term))) return { valid: false, reason: 'Invalid content' };
+
+    return { valid: true };
+  }
+
+  // Add cost tracking
+  private trackCost(provider: 'google' | 'openrouter', tokens: number) {
+    const COST_RATES = {
+      google: 0.0000025, // per token
+      openrouter: 0.0000018,
+    };
+
+    const cost = tokens * COST_RATES[provider];
+    // Send to monitoring system
   }
 }

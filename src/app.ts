@@ -16,8 +16,10 @@ import { ErrorMiddleware } from '@middlewares/error.middleware';
 import { logger, stream } from '@utils/logger';
 import RateLimitingMiddleware from '@middlewares/rateLimiting.middleware';
 import { Server } from 'http';
+import { WebSocketServer } from 'ws';
+import { setupAgentWebSocket } from './websocket/agent.websocket';
+// Import your WebSocket handler (adjust the path as needed)
 
-// Load environment variables
 dotenv.config();
 
 export class App {
@@ -45,6 +47,13 @@ export class App {
       logger.info(`🚀 App listening on the port ${this.port}`);
       logger.info(`=================================`);
     });
+
+    // Initialize the WebSocket server on the same HTTP server.
+    const wss = new WebSocketServer({ server: this.server, path: '/ai' });
+    wss.on('connection', (ws: any) => {
+      setupAgentWebSocket(ws);
+    });
+
     return this.server;
   }
 
