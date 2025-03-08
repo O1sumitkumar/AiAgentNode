@@ -10,16 +10,16 @@ import {
 } from '@google/generative-ai';
 import { TavilySearchResults } from '@langchain/community/tools/tavily_search';
 import { MemorySaver } from '@langchain/langgraph';
-import { createReactAgent } from '@langchain/langgraph/prebuilt';
+import { createReactAgent, toolsCondition } from '@langchain/langgraph/prebuilt';
 import { ChatOpenAI } from '@langchain/openai';
 import OpenAI from 'openai';
 import { RateLimiterMemory } from 'rate-limiter-flexible';
 import { Service } from 'typedi';
 import { WebSocket } from 'ws';
 
-// Enhanced system prompt
+// System prompt instructing Lana to answer directly and then include a follow-up question (without a visible prefix)
 const SYSTEM_PROMPT =
-  'You are Lana, an intelligent and friendly AI assistant developed by Atlantis Software Inc. for the Atlantis AI product owned by Sumeet kumar jha.  Your goal is to provide clear, concise, and accurate responses in a user-friendly format. When responding, always give a brief summary that covers only the essential details—even if the query is detailed. If needed, ask if the user would like more information. Respond naturally and clearly, without unnecessary elaboration.\n\n**Response Formatting Guidelines:**\n- **Keep it concise:** Provide only the key details in a brief summary.\n- **Bold Key Information:** Wrap important details in double asterisks (e.g., **Temperature: 26.8°C**).\n- **Code:** Use triple backticks (```) with a preceding key (e.g., `code:`) for code snippets.\n- **Links:** Precede links with a key label (e.g., `link:`) to help differentiate them in the UI.\n\nAlways maintain a warm, professional tone and be proactive in clarifying ambiguities.';
+  'You are Lana, an intelligent and friendly AI assistant developed by Atlantis Software Inc. for the Atlantis AI product owned by Sumeet kumar jha. Your goal is to provide clear, concise, and accurate responses in a user-friendly format. Begin with a brief summary covering only the essential details, but if the query explicitly requests more detail or if additional context is beneficial, expand your response with thorough explanations, examples, and context. After answering, include your follow-up question on a new line (do not include any literal prefix) to invite further discussion on the topic.';
 
 const freeModals = [
   'deepseek/deepseek-r1-distill-llama-70b:free',
@@ -29,33 +29,22 @@ const freeModals = [
   'nvidia/llama-3.1-nemotron-70b-instruct:free',
   'undi95/toppy-m-7b:free',
 ];
+
 // Gemini generation configuration
 const GEMINI_CONFIG: GenerationConfig = {
   temperature: 0.9,
   topK: 40,
   topP: 0.8,
-  maxOutputTokens: 4096, // Adjust if responses are long
+  maxOutputTokens: 4096,
   candidateCount: 1,
   stopSequences: ['User:', 'Assistant:'],
 };
 
 const SAFETY_SETTINGS: SafetySetting[] = [
-  {
-    category: HarmCategory.HARM_CATEGORY_HARASSMENT,
-    threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH,
-  },
-  {
-    category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,
-    threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH,
-  },
-  {
-    category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
-    threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH,
-  },
-  {
-    category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
-    threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH,
-  },
+  { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH },
+  { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH },
+  { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH },
+  { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH },
 ];
 
 @Service()
@@ -69,10 +58,7 @@ export class AgentService {
   private readonly geminiChats: Map<string, ConversationSession>;
   private readonly searchCache: Map<string, { results: any[]; timestamp: number }> = new Map();
   private readonly SESSION_EXPIRY = 1000 * 60 * 60; // 1 hour
-  readonly limiter = new RateLimiterMemory({
-    points: 100, // 100 requests
-    duration: 60, // per minute
-  });
+  readonly limiter = new RateLimiterMemory({ points: 100, duration: 60 });
 
   constructor() {
     this.getWebSearchResults = new TavilySearchResults({
@@ -80,7 +66,6 @@ export class AgentService {
       apiKey: process.env.TAVILY_API_KEY,
       includeImages: true,
     });
-
     this.openai = new OpenAI({
       baseURL: 'https://openrouter.ai/api/v1',
       apiKey: process.env.OPENROUTER_API_KEY,
@@ -89,7 +74,6 @@ export class AgentService {
         'X-Title': process.env.SITE_NAME || 'Local Development',
       },
     });
-
     const agentModel = new ChatOpenAI({
       modelName: 'openai/gpt-3.5-turbo',
       temperature: 0.7,
@@ -103,20 +87,15 @@ export class AgentService {
         },
       },
     });
-
     this.agentCheckpointer = new MemorySaver();
     this.agent = createReactAgent({
       llm: agentModel,
       tools: [this.getWebSearchResults],
       checkpointSaver: this.agentCheckpointer,
     });
-
     this.systemPrompt = SYSTEM_PROMPT;
-
     const apiKey = process.env.GOOGLE_GENAI_API_KEY;
-    if (!apiKey) {
-      throw new Error('GOOGLE_GENAI_API_KEY is not set in environment variables');
-    }
+    if (!apiKey) throw new Error('GOOGLE_GENAI_API_KEY is not set in environment variables');
     const genAI = new GoogleGenerativeAI(apiKey);
     this.geminiModel = genAI.getGenerativeModel({
       model: 'gemini-1.5-flash',
@@ -127,7 +106,6 @@ export class AgentService {
     setInterval(() => this.cleanupSessions(), this.SESSION_EXPIRY);
   }
 
-  /** Clean up inactive sessions */
   private cleanupSessions() {
     const now = Date.now();
     for (const [threadId, session] of this.geminiChats.entries()) {
@@ -137,7 +115,6 @@ export class AgentService {
     }
   }
 
-  /** Query using the react agent (non-streaming) */
   public async query(message: string, threadId: string) {
     await this.limiter.consume(threadId);
     const validation = this.validateMessage(message);
@@ -160,7 +137,6 @@ export class AgentService {
     }
   }
 
-  /** Stream query using the react agent */
   public async streamQuery(message: string, threadId: string | undefined, ws: WebSocket): Promise<void> {
     if (!message || typeof message !== 'string') {
       return ws.send(JSON.stringify({ type: 'error', content: 'Invalid message', threadId }));
@@ -200,7 +176,6 @@ export class AgentService {
     }
   }
 
-  /** Direct OpenAI stream completion */
   public async streamDirectCompletion(message: string, ws: WebSocket, threadId?: string): Promise<void> {
     if (!message || typeof message !== 'string') {
       return ws.send(JSON.stringify({ type: 'error', content: 'Invalid message', threadId }));
@@ -208,7 +183,7 @@ export class AgentService {
     let streamedContent = '';
     try {
       const stream = await this.openai.chat.completions.create({
-        model: freeModals[freeModals.length - 1],
+        model: freeModals[freeModals.length - 5],
         messages: [
           { role: 'system', content: this.systemPrompt },
           { role: 'user', content: message.trim() },
@@ -230,64 +205,63 @@ export class AgentService {
     }
   }
 
-  /** Gemini completion with context awareness and search integration */
   public async geminiCompletion(message: string, ws: WebSocket, threadId: string, userId?: string) {
     if (!message?.trim()) {
       return ws.send(JSON.stringify({ type: 'error', content: 'Invalid message', threadId }));
     }
     const trimmedMessage = message.trim();
-    try {
-      let session: ConversationSession;
-      if (this.geminiChats.has(threadId)) {
-        session = this.geminiChats.get(threadId)!;
-        session.lastUpdated = new Date();
+    let session: ConversationSession;
+    if (this.geminiChats.has(threadId)) {
+      session = this.geminiChats.get(threadId)!;
+      session.lastUpdated = new Date();
+    } else {
+      session = await this.initializeNewChat([], userId);
+      this.geminiChats.set(threadId, session);
+    }
+
+    // Handle "can you look on web" command to use last search query.
+    if (trimmedMessage.toLowerCase() === 'can you look on web') {
+      if (session.context.lastSearchQuery && session.context.lastSearchQuery.trim().length > 0) {
+        await this.handleSearchAndResponse(session.chat, session, session.context.lastSearchQuery, ws, threadId);
+        return;
       } else {
-        session = await this.initializeNewChat([], userId);
-        this.geminiChats.set(threadId, session);
+        ws.send(JSON.stringify({ role: 'assistant', threadId, type: 'done', content: "I don't have any recent query to search for on the web." }));
+        return;
       }
+    }
 
-      // Analyze whether the query needs fresh information.
-      const analysisPrompt = `Question/Request: "${trimmedMessage}"
+    // Handle simple "yes" to answer follow-up.
+    if (trimmedMessage.toLowerCase() === 'yes') {
+      if (session.context.followUpQuestion && session.context.followUpQuestion.length > 0) {
+        const followUpPrompt = session.context.followUpQuestion;
+        session.context.followUpQuestion = '';
+        const followUpResult = await session.chat.sendMessage(followUpPrompt);
+        const answer = followUpResult.response.text();
+        ws.send(JSON.stringify({ role: 'assistant', threadId, type: 'done', content: answer }));
+        return;
+      }
+    }
 
-Please analyze if this query requires current or real-time information or fact-checking. If the request is for creative writing, summarization, or relies on general knowledge, respond with DIRECT.
+    // Analyze if current/real-time information is required.
+    const analysisPrompt = `Question/Request: "${trimmedMessage}"
+
+Please analyze if this query requires current or real-time information or fact-checking. If it is creative writing, summarization, or relies on general knowledge, respond with DIRECT.
 Only respond with SEARCH if the query explicitly demands up-to-date factual information.
 Respond in this format:
 DECISION: [SEARCH or DIRECT]
 REASON: [One brief sentence explaining why]`;
 
-      const analysisResult = await session.chat.sendMessage(analysisPrompt);
-      const analysisResponse = analysisResult.response.text();
-      const needsSearch = analysisResponse.includes('DECISION: SEARCH');
-      const reason = analysisResponse.match(/REASON: (.*)/)?.[1] || '';
+    const analysisResult = await session.chat.sendMessage(analysisPrompt);
+    const analysisResponse = analysisResult.response.text();
+    const needsSearch = analysisResponse.includes('DECISION: SEARCH');
 
-      if (needsSearch) {
-        ws.send(
-          JSON.stringify({
-            role: 'assistant',
-            threadId,
-            type: 'tool',
-            content: `I am looking for updated information about this topic 😁: ${reason}`,
-          }),
-        );
-        await this.handleSearchAndResponse(session.chat, session, trimmedMessage, ws, threadId);
-      } else {
-        await this.handleNormalChat(session.chat, session.history, trimmedMessage, ws, threadId);
-      }
-    } catch (chatError) {
-      console.error('Error in geminiCompletion:', chatError);
-      ws.send(
-        JSON.stringify({
-          type: 'error',
-          role: 'assistant',
-          content: chatError instanceof Error ? chatError.message : 'Error processing query',
-          threadId,
-        }),
-      );
-      this.geminiChats.delete(threadId);
+    if (needsSearch) {
+      await this.handleSearchAndResponse(session.chat, session, trimmedMessage, ws, threadId);
+    } else {
+      await this.handleNormalChat(session.chat, session.history, trimmedMessage, ws, threadId);
     }
   }
 
-  /** Initialize a new Gemini chat session */
   private async initializeNewChat(history: ChatHistory[], userId?: string): Promise<ConversationSession> {
     const chat = this.geminiModel.startChat({
       history: [],
@@ -312,6 +286,8 @@ REASON: [One brief sentence explaining why]`;
           searchHistory: [],
           messageCount: 1,
           lastInteraction: new Date(),
+          followUpQuestion: '',
+          lastSearchQuery: '',
         },
       };
     } catch (error) {
@@ -320,7 +296,6 @@ REASON: [One brief sentence explaining why]`;
     }
   }
 
-  /** Handle query that requires web search */
   private async handleSearchAndResponse(
     chat: GeminiChatSession,
     session: ConversationSession,
@@ -328,11 +303,12 @@ REASON: [One brief sentence explaining why]`;
     ws: WebSocket,
     threadId: string,
   ): Promise<void> {
+    // Save current query as lastSearchQuery.
+    session.context.lastSearchQuery = message;
     let searchResults: any[];
     const cacheKey = message;
     const cacheEntry = this.searchCache.get(cacheKey);
     if (cacheEntry && Date.now() - cacheEntry.timestamp < 1000 * 60 * 5) {
-      // 5 minutes cache
       searchResults = cacheEntry.results;
     } else {
       searchResults = await this.getWebSearchResults.invoke(message);
@@ -345,7 +321,13 @@ REASON: [One brief sentence explaining why]`;
     });
     session.lastUpdated = new Date();
 
-    // Build prompt including search results and ask for a brief, natural response.
+    // If no results found, respond with default message.
+    if (!searchResults || searchResults.length === 0) {
+      ws.send(JSON.stringify({ role: 'assistant', threadId, type: 'done', content: "I'm sorry, I don't have data or access to that information." }));
+      return;
+    }
+
+    // Build a prompt including search results and context; instruct to add a follow-up question.
     const messageWithContext = `User Query: "${message}"
 
 Search Results: ${JSON.stringify(searchResults, null, 2)}
@@ -353,7 +335,7 @@ Search Results: ${JSON.stringify(searchResults, null, 2)}
 Previous Context: ${session.context.topic ? `This conversation is about ${session.context.topic}.` : 'No previous topic.'}
 Search History: ${session.context.searchHistory.length} searches so far.
 
-Task: Provide a **brief and natural response** that summarizes the key information without excessive detail. Cite sources as [URL] if applicable.`;
+Task: Provide a clear and natural response that summarizes the key information. Start with a concise summary, and if additional detail is relevant or explicitly requested, expand your answer with further context, examples, and explanations. On a new line, include your follow-up question (without any prefix) to invite further discussion.`;
 
     await this.processAndStreamResponse(chat, session.history, messageWithContext, ws, threadId);
 
@@ -363,7 +345,6 @@ Task: Provide a **brief and natural response** that summarizes the key informati
     }
   }
 
-  /** Handle normal chat without additional search context */
   private async handleNormalChat(chat: GeminiChatSession, history: ChatHistory[], message: string, ws: WebSocket, threadId: string): Promise<void> {
     if (!this.geminiChats.has(threadId)) {
       const session = await this.initializeNewChat(history);
@@ -381,9 +362,8 @@ Task: Provide a **brief and natural response** that summarizes the key informati
 
 Previous Context: ${topicInfo}
 
-Task: Provide a **clear and natural response** with only the essential details, ensuring it is easy to read.`;
+Task: Provide a clear and natural response that covers the essential details. Start with a concise summary, and if additional context or examples are relevant, expand your answer with detailed explanations. On a new line, include your follow-up question (without any prefix) to invite further discussion.`;
     await this.processAndStreamResponse(chat, history, messageWithContext, ws, threadId);
-
     const session = this.geminiChats.get(threadId)!;
     if (!session.context.topic) {
       const topicAnalysis = await chat.sendMessage("Based on our conversation so far, what's the main topic? Respond with just 2-3 words.");
@@ -391,7 +371,33 @@ Task: Provide a **clear and natural response** with only the essential details, 
     }
   }
 
-  /** Process message and stream response token-by-token */
+  // Build conversation history from ChatHistory array.
+  private buildConversationHistory(history: ChatHistory[]): string {
+    return history
+      .map(entry => {
+        const roleLabel = entry.role === 'user' ? 'User' : 'Assistant';
+        return `${roleLabel}: ${entry.parts.map(part => part.text).join(' ')}`;
+      })
+      .join('\n');
+  }
+
+  // Build a brief summary of key topics from history.
+  private buildConversationSummary(history: ChatHistory[]): string {
+    const topics = new Set<string>();
+    history.forEach(entry => {
+      if (entry.role === 'model') {
+        const text = entry.parts.map(part => part.text.toLowerCase()).join(' ');
+        if (text.includes('gold') && text.includes('surat')) {
+          topics.add('gold price in Surat, India');
+        }
+      }
+    });
+    if (topics.size > 0) {
+      return `Reminder: We have been discussing ${Array.from(topics).join(', ')}.`;
+    }
+    return '';
+  }
+
   private async processAndStreamResponse(
     chat: GeminiChatSession,
     history: ChatHistory[],
@@ -405,9 +411,13 @@ Task: Provide a **clear and natural response** with only the essential details, 
     session.context.lastInteraction = new Date();
     session.lastUpdated = new Date();
     history.push({ role: 'user', parts: [{ text: message }] });
+    // Build conversation history and summary.
+    const conversationHistory = this.buildConversationHistory(history);
+    const conversationSummary = this.buildConversationSummary(history);
+    const finalPrompt = `${conversationSummary}\n${conversationHistory}\nAssistant: `;
     try {
       let streamedContent = '';
-      const result = await chat.sendMessageStream(message);
+      const result = await chat.sendMessageStream(finalPrompt);
       for await (const chunk of result.stream) {
         const content = chunk.text();
         if (content) {
@@ -416,8 +426,20 @@ Task: Provide a **clear and natural response** with only the essential details, 
         }
       }
       if (streamedContent) {
-        history.push({ role: 'model', parts: [{ text: streamedContent }] });
-        ws.send(JSON.stringify({ role: 'assistant', threadId, type: 'done', content: streamedContent }));
+        // Extract any follow-up question.
+        const followUp = this.extractFollowUpQuestion(streamedContent);
+        session.context.followUpQuestion = followUp || '';
+        // Remove unwanted lines (e.g. follow-up markers and specific phrases).
+        const unwantedPhrases = ["i still need to know whose education details you're requesting."];
+        const displayContent = streamedContent
+          .split('\n')
+          .filter(line => {
+            const lowerLine = line.toLowerCase();
+            return !lowerLine.startsWith('follow-up:') && !unwantedPhrases.some(phrase => lowerLine.includes(phrase));
+          })
+          .join('\n');
+        history.push({ role: 'model', parts: [{ text: displayContent }] });
+        ws.send(JSON.stringify({ role: 'assistant', threadId, type: 'done', content: displayContent }));
       }
     } catch (error) {
       console.error('Error in stream processing:', error);
@@ -432,8 +454,18 @@ Task: Provide a **clear and natural response** with only the essential details, 
     }
   }
 
-  /** Direct (non-streaming) completion using OpenAI */
-  public async directCompletion(message: string) {
+  private extractFollowUpQuestion(response: string): string | null {
+    const lines = response.split('\n');
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = lines[i].trim();
+      if (line.toLowerCase().startsWith('follow-up:')) {
+        return line.substring('follow-up:'.length).trim();
+      }
+    }
+    return null;
+  }
+
+  public async streamChatCompletion(message: string, ws: WebSocket, threadId: string) {
     try {
       const completion = await this.openai.chat.completions.create({
         model: 'deepseek/deepseek-r1-distill-llama-70b:free',
@@ -441,31 +473,45 @@ Task: Provide a **clear and natural response** with only the essential details, 
           { role: 'system', content: this.systemPrompt },
           { role: 'user', content: message },
         ],
+        stream: true,
+        response_format: { type: 'json_object' },
+        reasoning_effort: 'high',
+        logprobs: true,
+        stream_options: { include_usage: true },
+        user: threadId,
+        metadata: { thread_id: threadId },
       });
       console.log(completion);
-      return completion.choices[0]?.message.content;
+      // Stream handling: process tokens as they arrive
+      for await (const chunk of completion) {
+        if (chunk.choices && chunk.choices.length > 0) {
+          const token = chunk.choices[0]?.delta?.content || ''; // Extract token from response
+          if (token) {
+            ws.send(JSON.stringify({ role: 'assistant', threadId, type: 'token', content: token }));
+          }
+        }
+      }
+
+      // Send final message indicating completion
+      ws.send(JSON.stringify({ role: 'assistant', threadId, type: 'done' }));
     } catch (error) {
-      console.error('Error in direct completion:', error);
-      throw error;
+      console.error('Error in streaming completion:', error);
+      ws.send(JSON.stringify({ role: 'error', threadId, message: 'An error occurred while generating the response.' }));
     }
   }
 
-  /** Retrieve session info */
   public async getSessionInfo(threadId: string): Promise<ConversationSession | null> {
     return this.geminiChats.get(threadId) || null;
   }
 
-  /** Clear a session */
   public async clearSession(threadId: string): Promise<void> {
     this.geminiChats.delete(threadId);
   }
 
-  // Consider adding model quality gates
   private shouldUseExpensiveModel(message: string): boolean {
-    return message.split(/\s+/).length > 50; // Use cheaper models for short queries
+    return message.split(/\s+/).length > 50;
   }
 
-  // Add fallback mechanism
   private async withFallback(fn: () => Promise<any>, fallbackFn: () => Promise<any>) {
     try {
       return await fn();
@@ -477,25 +523,20 @@ Task: Provide a **clear and natural response** with only the essential details, 
     }
   }
 
-  // Add validation layer
   private validateMessage(message: string): { valid: boolean; reason?: string } {
     const MAX_LENGTH = 1000;
-    const BLACKLIST = ['credit card', 'password' /* sensitive terms */];
-
+    const BLACKLIST = ['credit card', 'password'];
     if (message.length > MAX_LENGTH) return { valid: false, reason: 'Message too long' };
     if (BLACKLIST.some(term => message.includes(term))) return { valid: false, reason: 'Invalid content' };
-
     return { valid: true };
   }
 
-  // Add cost tracking
   private trackCost(provider: 'google' | 'openrouter', tokens: number) {
     const COST_RATES = {
-      google: 0.0000025, // per token
+      google: 0.0000025,
       openrouter: 0.0000018,
     };
-
     const cost = tokens * COST_RATES[provider];
-    // Send to monitoring system
+    // Send cost data to a monitoring system.
   }
 }

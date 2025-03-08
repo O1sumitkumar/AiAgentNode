@@ -16,6 +16,8 @@ export interface ConversationSession extends ChatSession {
   createdAt: Date;
   lastUpdated: Date;
   context: {
+    followUpQuestion?: string;
+    followUpAnswer?: string;
     topic?: string;
     searchHistory: Array<{
       query: string;
@@ -25,5 +27,6 @@ export interface ConversationSession extends ChatSession {
     messageCount: number;
     lastInteraction: Date;
     summary?: string;
+    lastSearchQuery?: string;
   };
 }

@@ -3,7 +3,7 @@ import { Container } from 'typedi';
 import { AgentService } from '@services/agent.service';
 
 interface Message {
-  type: 'agent' | 'direct' | 'gemini';
+  type: 'agent' | 'direct' | 'gemini' | 'deepseek';
   content: string;
   threadId?: string;
 }
@@ -37,6 +37,9 @@ export function setupAgentWebSocket(ws: WebSocket): void {
 
         case 'gemini':
           await agentService.geminiCompletion(message.content.trim(), ws, message.threadId || '');
+          break;
+        case 'deepseek':
+          await agentService.streamChatCompletion(message.content.trim(), ws, message.threadId || '');
           break;
 
         default:
