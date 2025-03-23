@@ -18,7 +18,7 @@ services:
       context: ./
       dockerfile: Dockerfile.dev
     ports:
-      - '3000:3001'
+      - '0.0.0.0:3000:3000' # Allows access from any network interface
     env_file:
       - .env # Make sure your environment file is named .env
     environment:
@@ -47,7 +47,7 @@ services:
     container_name: mongo
     image: mongo
     ports:
-      - '27017:27018'
+      - '27017:27017'
     networks:
       - backend
 

@@ -10,12 +10,12 @@ import {
 } from '@google/generative-ai';
 import { TavilySearchResults } from '@langchain/community/tools/tavily_search';
 import { MemorySaver } from '@langchain/langgraph';
-import { createReactAgent, toolsCondition } from '@langchain/langgraph/prebuilt';
+import { createReactAgent } from '@langchain/langgraph/prebuilt';
 import { ChatOpenAI } from '@langchain/openai';
 import OpenAI from 'openai';
 import { RateLimiterMemory } from 'rate-limiter-flexible';
 import { Service } from 'typedi';
-import { WebSocket } from 'ws';
+import WebSocket from 'ws';
 
 // System prompt instructing Lana to answer directly and then include a follow-up question (without a visible prefix)
 const SYSTEM_PROMPT =
@@ -537,6 +537,7 @@ Task: Provide a clear and natural response that covers the essential details. St
       openrouter: 0.0000018,
     };
     const cost = tokens * COST_RATES[provider];
+    return cost;
     // Send cost data to a monitoring system.
   }
 }

@@ -16,7 +16,7 @@ import { ErrorMiddleware } from '@middlewares/error.middleware';
 import { logger, stream } from '@utils/logger';
 import RateLimitingMiddleware from '@middlewares/rateLimiting.middleware';
 import { Server } from 'http';
-import { WebSocketServer } from 'ws';
+import WebSocket from 'ws';
 import { setupAgentWebSocket } from './websocket/agent.websocket';
 // Import your WebSocket handler (adjust the path as needed)
 
@@ -49,7 +49,7 @@ export class App {
     });
 
     // Initialize the WebSocket server on the same HTTP server.
-    const wss = new WebSocketServer({ server: this.server, path: '/ai' });
+    const wss = new WebSocket.Server({ server: this.server, path: '/ai' });
     wss.on('connection', (ws: any) => {
       setupAgentWebSocket(ws);
     });
