@@ -1,4 +1,5 @@
 import 'reflect-metadata';
+import dotenv from 'dotenv';
 import compression from 'compression';
 import cookieParser from 'cookie-parser';
 import cors from 'cors';
@@ -14,8 +15,16 @@ import { Routes } from '@interfaces/routes.interface';
 import { ErrorMiddleware } from '@middlewares/error.middleware';
 import { logger, stream } from '@utils/logger';
 import RateLimitingMiddleware from '@middlewares/rateLimiting.middleware';
+import { Server } from 'http';
+import WebSocket from 'ws';
+import { setupAgentWebSocket } from './websocket/agent.websocket';
+// Import your WebSocket handler (adjust the path as needed)
+
+dotenv.config();
+
 export class App {
   public app: express.Application;
+  private server: Server;
   public env: string;
   public port: string | number;
 
@@ -31,17 +40,25 @@ export class App {
     this.initializeErrorHandling();
   }
 
-  public listen() {
-    this.app.listen(this.port, () => {
+  public listen(): Server {
+    this.server = this.app.listen(this.port, () => {
       logger.info(`=================================`);
       logger.info(`======= ENV: ${this.env} =======`);
       logger.info(`🚀 App listening on the port ${this.port}`);
       logger.info(`=================================`);
     });
+
+    // Initialize the WebSocket server on the same HTTP server.
+    const wss = new WebSocket.Server({ server: this.server, path: '/ai' });
+    wss.on('connection', (ws: any) => {
+      setupAgentWebSocket(ws);
+    });
+
+    return this.server;
   }
 
-  public getServer() {
-    return this.app;
+  public getServer(): Server {
+    return this.server;
   }
 
   private async connectToDatabase() {
@@ -52,41 +69,34 @@ export class App {
     this.app.use(morgan(LOG_FORMAT, { stream }));
     this.app.use(cors({ origin: ORIGIN, credentials: CREDENTIALS }));
     this.app.use(hpp());
-    this.app.use(helmet());
+    this.app.use(helmet({ contentSecurityPolicy: false })); // Apply only once
     this.app.use(compression());
     this.app.use(cookieParser());
-    this.app.use(express.json({ limit: '10kb' })); // Limit JSON body size to 10kb
-    this.app.use(express.urlencoded({ extended: true, limit: '10kb' })); // Limit URL-encoded body size
-    this.app.use(RateLimitingMiddleware); // Apply rate limiting
+    this.app.use(express.json({ limit: '10kb' }));
+    this.app.use(express.urlencoded({ extended: true, limit: '10kb' }));
+    this.app.use(RateLimitingMiddleware); // 10 requests per minute
 
-    // Security Headers Middleware
-    this.app.use(
-      helmet({
-        contentSecurityPolicy: false, // Adjust as necessary
-      }),
-    );
-
-    // Serve static files (if applicable)
-    this.app.use(express.static('public')); // Adjust the path as necessary
+    // Serve static files
+    this.app.use('/static', express.static('public'));
   }
 
   private initializeRoutes(routes: Routes[]) {
     routes.forEach(route => {
-      // Example of input validation
       this.app.use('/', route.router);
     });
   }
 
   private initializeSwagger() {
     const options = {
-      swaggerDefinition: {
+      definition: {
+        openapi: '3.0.0',
         info: {
           title: 'REST API',
           version: '1.0.0',
-          description: 'Example docs',
+          description: 'Example API documentation',
         },
       },
-      apis: ['swagger.yaml'],
+      apis: ['./swagger.yaml'], // Ensure correct path
     };
 
     const specs = swaggerJSDoc(options);
