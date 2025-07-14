@@ -39,7 +39,7 @@ This project provides an intelligent agent service that can be integrated with a
 1. Clone the repository:
 
 ````
-git clone https://github.com/your-username/AiAgentNode.git
+git clone https://github.com/o1sumitkumar/AiAgentNode.git
 cd AiAgentNode
 
 ## Access Docker Exposed Ports and Related Information
